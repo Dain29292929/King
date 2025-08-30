@@ -1,0 +1,282 @@
+task.wait(0.7)
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local Player = Players.LocalPlayer
+local place = game.PlaceId
+
+-- Lost Connection 방지 (wait 제거)
+local function PreventLostConnection()
+    TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+        warn("텔레포트 초기화 실패:", teleportResult, errorMessage)
+    end)
+    game:GetService("GuiService").ErrorMessageChanged:Connect(function() end)
+    game:GetService("NetworkClient").ChildRemoved:Connect(function()
+        warn("네트워크 연결 끊어짐 감지")
+    end)
+end
+PreventLostConnection()
+
+-- 캐릭터 준비 대기
+local function WaitForCharacter()
+    if not Player.Character or not Player.Character:FindFirstChild("HumanoidRootPart") then
+        Player.CharacterAdded:Wait()
+        repeat task.wait(0.17) until Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+    end
+end
+
+-- 안전한 서버 호출
+local function SafeInvoke(funcName, args)
+    if type(args) ~= "table" then args = {args} end
+    local success, result = pcall(function()
+        WaitForCharacter()
+        return ReplicatedStorage:WaitForChild("Chest"):WaitForChild("Remotes")
+            :WaitForChild("Functions"):WaitForChild(funcName)
+            :InvokeServer(unpack(args))
+    end)
+    if not success then warn("InvokeServer 오류:", funcName, result) end
+    return success
+end
+
+-- Tashi Blade 장착
+local function EnsureTashiBlade()
+    WaitForCharacter()
+    if not Player.Backpack:FindFirstChild("Tashi Blade") and not Player.Character:FindFirstChild("Tashi Blade") then
+        local args = {"Tashi Blade"}
+        SafeInvoke("InventoryEq", args)
+    end
+end
+
+-- SeaMonsterSpawnText 시간 파싱 함수
+local function ParseSeaMonsterTime()
+    local success, seaMonsterText = pcall(function()
+        return ReplicatedStorage:GetAttribute("SeaMonsterSpawnText") or "00:00:00"
+    end)
+    
+    if not success then return 0 end
+    
+    local hours, minutes, seconds = string.match(seaMonsterText, "(%d+):(%d+):(%d+)")
+    if hours and minutes and seconds then
+        return tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds)
+    end
+    return 0
+end
+
+-- 이동 함수
+local function TeleportToChest()
+    WaitForCharacter()
+    local island = Workspace:FindFirstChild("Island")
+    if island then
+        local chestSpawner = island:FindFirstChild("ChestSpawner", true)
+        if chestSpawner then
+            Player.Character.HumanoidRootPart.CFrame = chestSpawner.CFrame
+            return true
+        end
+    end
+    return false
+end
+
+local function TeleportToSeaKingBody()
+    WaitForCharacter()
+    local body = Workspace:FindFirstChild("SeaMonster")
+        and Workspace.SeaMonster:FindFirstChild("SeaKing")
+        and Workspace.SeaMonster.SeaKing:FindFirstChild("SeaKing")
+        and Workspace.SeaMonster.SeaKing.SeaKing:FindFirstChild("Body")
+    if body then
+        -- Body의 아래쪽과 더 앞쪽으로 텔레포트 (X축 +30, Y축 -10 오프셋)
+        local targetCFrame = body.CFrame * CFrame.new(30, -10, 0)
+        Player.Character.HumanoidRootPart.CFrame = targetCFrame
+        EnsureTashiBlade()
+        -- 스킬 실행
+        SafeInvoke("SkillAction", {"SW_Tashi Blade_M1"})
+        pcall(function()
+            SafeInvoke("SkillAction", {"SW_Tashi Blade_X", {MouseHit = body.CFrame, Type = "Down"}})
+            SafeInvoke("SkillAction", {"SW_Tashi Blade_Z", {MouseHit = body.CFrame, Type = "Up"}})
+        end)
+        return true
+    end
+    return false
+end
+
+local function TeleportToSeaKingWater()
+    WaitForCharacter()
+    local island = Workspace:FindFirstChild("Island")
+    if island then
+        local water = island:FindFirstChild("Sea King Water", true)
+        if water and water:FindFirstChild("RootPart") then
+            Player.Character.HumanoidRootPart.CFrame = water.RootPart.CFrame
+            return true
+        end
+    end
+    return false
+end
+
+-- 게임 입장
+SafeInvoke("EtcFunction", {"EnterTheGame", {}})
+
+-- 이동 루프
+RunService.RenderStepped:Connect(function()
+    TeleportToChest()
+    TeleportToSeaKingBody()
+    TeleportToSeaKingWater()
+end)
+
+-- 서버홉 타이머
+local lastChestTime, lastBodyTime, lastRootTime = 0,0,0
+local serverHopPaused = false
+
+local function ShouldHopServer()
+    WaitForCharacter()
+    
+    -- SeaMonsterSpawnText 체크
+    local remainingTime = ParseSeaMonsterTime()
+    
+    -- 59초 이하면 서버홉 일시정지
+    if remainingTime > 0 and remainingTime <= 59 then
+        if not serverHopPaused then
+            print("⏳ SeaMonster 스폰까지 " .. remainingTime .. "초 남음. 서버홉 일시정지.")
+            serverHopPaused = true
+        end
+        return false
+    end
+    
+    -- 0초가 되면 서버홉 재개
+    if remainingTime == 0 and serverHopPaused then
+        print("✅ SeaMonster 스폰 시간 도달! 서버홉 재개.")
+        serverHopPaused = false
+    end
+    
+    -- 서버홉이 일시정지된 상태라면 false 반환
+    if serverHopPaused then
+        return false
+    end
+    
+    local island = Workspace:FindFirstChild("Island")
+    local chestExists = island and island:FindFirstChild("ChestSpawner", true)
+    local waterExists = island and island:FindFirstChild("Sea King Water", true) and island["Sea King Water"]:FindFirstChild("RootPart")
+    local bodyExists = Workspace:FindFirstChild("SeaMonster")
+        and Workspace.SeaMonster:FindFirstChild("SeaKing")
+        and Workspace.SeaMonster.SeaKing:FindFirstChild("SeaKing")
+        and Workspace.SeaMonster.SeaKing.SeaKing:FindFirstChild("Body")
+    local now = tick()
+
+    -- Body 없고 Chest만 있는 경우
+    if chestExists and not bodyExists then
+        if lastChestTime == 0 then lastChestTime = now end
+        if now - lastChestTime >= 10 then lastChestTime = 0 return true end
+        return false
+    else
+        lastChestTime = 0
+    end
+
+    -- Body 있고 Chest 있는 경우
+    if chestExists and bodyExists then
+        lastBodyTime = now
+        return false
+    elseif not bodyExists and lastBodyTime > 0 then
+        if now - lastBodyTime >= 10 then lastBodyTime = 0 return true end
+        return false
+    end
+
+    -- RootPart 있는 경우
+    if waterExists then
+        if lastRootTime == 0 then lastRootTime = now end
+        if now - lastRootTime >= 10 then lastRootTime = 0 return true end
+        return false
+    else
+        lastRootTime = 0
+    end
+
+    -- 모든 것이 없으면 즉시 서버홉
+    if not chestExists and not bodyExists and not waterExists then
+        return true
+    end
+
+    return false
+end
+
+-- 서버 목록 기반 무한 서버 텔레포트
+local GetServersFunction = ReplicatedStorage:WaitForChild("Chest"):WaitForChild("Remotes")
+    :WaitForChild("Functions"):WaitForChild("GetServers")
+local currentJobId = game.JobId
+
+print("🔎 서버 조건 기반 무한 서버홉 시작")
+
+while true do
+    if ShouldHopServer() then
+        local attemptedJobIds = {} -- 이미 시도한 서버들 기록
+        local foundValidServer = false
+        
+        while not foundValidServer do
+            local serversToHopTo = {}
+            local foundJobIds = {}
+            local success, serversTable = pcall(function()
+                return GetServersFunction:InvokeServer()
+            end)
+
+            if success and serversTable then
+                for _, serverInfo in pairs(serversTable) do
+                    local osTime = serverInfo.ServerOsTime
+                    local serverJobId = serverInfo.JobId
+                    if not osTime or serverJobId == currentJobId or foundJobIds[serverJobId] or attemptedJobIds[serverJobId] then 
+                        continue 
+                    end
+
+                    local uptimeSeconds = os.time() - osTime
+
+                    -- 3780초의 배수에서 -60초 ~ +300초 여유를 둔 서버 찾기 (1시간 이상만)
+                    if uptimeSeconds >= 3600 then -- 1시간 이상만
+                        local baseTime = math.floor(uptimeSeconds / 3780) * 3780
+                        if baseTime > 0 then -- 3780초 배수가 있는 경우
+                            local minRange = baseTime - 60 -- -1분
+                            local maxRange = baseTime + 300 -- +5분
+                            
+                            -- 범위 내에 있는 서버 선택
+                            if uptimeSeconds >= minRange and uptimeSeconds <= maxRange then
+                                table.insert(serversToHopTo, serverInfo)
+                                foundJobIds[serverJobId] = true
+                            end
+                        end
+                    end
+                end
+            end
+
+            if #serversToHopTo > 0 then
+                print("🎯 조건 맞는 서버", #serversToHopTo, "개 발견")
+                
+                local allAttempted = true
+                for _, server in ipairs(serversToHopTo) do
+                    print("➡️ 서버 텔레포트 시도 JobId:", server.JobId)
+                    attemptedJobIds[server.JobId] = true -- 시도한 서버 기록
+                    
+                    local tpSuccess, tpErr = pcall(function()
+                        TeleportService:TeleportToPlaceInstance(place, server.JobId)
+                    end)
+                    
+                    if tpSuccess then
+                        print("✅ 텔레포트 요청 성공 JobId:", server.JobId)
+                        foundValidServer = true
+                        -- break 제거 - 성공해도 계속 다른 서버들도 시도
+                    else
+                        warn("❌ 텔레포트 실패 JobId:", server.JobId, tpErr)
+                    end
+                    
+                    task.wait(0.7) -- 각 텔레포트 시도 사이 0.17초 대기
+                end
+                
+                if foundValidServer then
+                    print("🎉 현재 배치에서", #serversToHopTo, "개 서버 모두 시도 완료!")
+                else
+                    print("🔄 현재 배치 서버들 모두 실패, 새로운 서버 목록 요청중...")
+                    task.wait(1.7) --ervers 호출
+                end
+            else
+                print("😢 조건 맞는 서버 없음, 새로운 서버 목록 요청중...")
+                task.wait(0.17) -- 0.17초 대기 후 다시 GetServers 호출
+            end
+        end
+    end
+    task.wait(0.17)
+end
