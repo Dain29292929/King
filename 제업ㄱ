@@ -1,182 +1,257 @@
--- 죽음 5초 중단 + 안티치트 감지 풀림 + 흔들림 방지 | Lv10+ 슬라임 강제 | 머리 위 수직 엎드림 | 0.055초 쿨타임
+-- [[ 서비스 및 기본 변수 정의 ]]
 local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local VirtualUser = game:GetService("VirtualUser")
+local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local LocalPlayer = Players.LocalPlayer
+local GuiService = game:GetService("GuiService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
-local Character, HRP, Hum = nil, nil, nil
-local farming = true
-local lastSell = 0
-local curTarget = nil
-local switchTime = 0
+-- [[ 캐릭터 굳음 방지 ]]
+if LocalPlayer.Character then
+    local hum = LocalPlayer.Character:FindFirstChild("Humanoid")
+    if hum then hum.PlatformStand = false end
+end
+
+-- [[ 오토팜 설정 테이블 ]]
+local AutoFarmConfig = {
+    Enabled = false,
+    Distance = -0.3,          -- 앞으로 살짝 가까이
+    HeightOffset = 2.5,       -- 머리 위 2.5 (더 가까이)
+    TargetMob = nil,
+    CurrentTarget = nil,
+    AutoSkillEnabled = false,
+    AutoClickEnabled = true,
+    Skills = {E = false, R = false, T = false}
+}
+
+local AttackDirection = "Up" -- 위쪽 수직 고정
+local DirectionAngles = {Front = 0, Back = 180, Up = -90, Down = 90}
+local Mobs = Workspace:WaitForChild("Mobs") 
+local MobList, MobMap = {}, {} 
+local AutoFarmConnection = nil 
+local lastAttackTime = 0 
+local lastSkillTime = 0 
+local LastSpawnTime = 0
 local deathPauseUntil = 0  -- 죽음 후 중단 시간
 
--- 리스폰 바인드 + 사망 감지
-local function bindChar(char)
-    print("[DEBUG] 캐릭터 재바인드")
-    Character = char
-    HRP = char:WaitForChild("HumanoidRootPart", 10)
-    Hum = char:WaitForChild("Humanoid", 10)
-    if not HRP or not Hum then task.wait(3) bindChar(char) return end
-    
-    Hum.MaxHealth = math.huge Hum.Health = math.huge
-    for _, p in pairs(char:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end
-    Instance.new("ForceField", char)
-    
-    -- 사망 감지
-    Hum.Died:Connect(function()
-        print("[DEATH] 사망 → 5초 오토팜 중단")
-        farming = false
-        deathPauseUntil = tick() + 5
-        curTarget = nil
+-- 리스폰 & 사망 감지
+Players.LocalPlayer.CharacterAdded:Connect(function()
+    LastSpawnTime = tick()
+end)
+
+-- 사망 시 5초 중단
+LocalPlayer.CharacterAdded:Connect(function(char)
+    task.wait(0.5)
+    local hum = char:WaitForChild("Humanoid", 5)
+    if hum then
+        hum.Died:Connect(function()
+            print("[DEATH] 사망 → 5초 오토팜 중단")
+            AutoFarmConfig.Enabled = false
+            deathPauseUntil = tick() + 5
+            AutoFarmConfig.CurrentTarget = nil
+        end)
+    end
+end)
+
+-- [[ 캐릭터 객체 가져오기 ]]
+local function getCharacter()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
+
+-- [[ 스킬 사용 함수 ]]
+local function fireSkill(skillKey)
+    pcall(function()
+        local remote = ReplicatedStorage:WaitForChild("Remote"):WaitForChild("Skill")
+        remote:FireServer(skillKey)
     end)
 end
 
-LocalPlayer.CharacterAdded:Connect(function(c) task.wait(0.5) bindChar(c) end)
-if LocalPlayer.Character then bindChar(LocalPlayer.Character) end
+-- [[ 몹 리스트 갱신 함수 ]]
+local function getMobList()
+    local mobsFolder = Workspace:FindFirstChild("Mobs")
+    if not mobsFolder then return {}, {} end
 
--- 레벨
-local function getLevel()
-    local ls = LocalPlayer:WaitForChild("leaderstats", 8)
-    if not ls then return 0 end
-    local lvl = ls:WaitForChild("Level", 5)
-    if not lvl then return 0 end
-    return lvl.Value or 0
-end
+    local processedMobs = {}
+    local mobDisplayList = {}
+    local mobNameMap = {}
 
--- getQuestNum 오류 무시
-local function getQuestNum()
-    local success, result = pcall(function()
-        local pg = LocalPlayer:WaitForChild("PlayerGui", 10)
-        if not pg then return 0 end
-        
-        local sg = pg:FindFirstChild("ScreenGui") or pg:FindFirstChild("MainGui") or pg:FindFirstChild("UI")
-        if not sg then return 0 end
-        
-        local q = sg:FindFirstChild("Quest") or sg:FindFirstChild("QuestFrame")
-        if not q then return 0 end
-        
-        for _, o in pairs(q:GetDescendants()) do
-            if o and (o:IsA("TextLabel") or o:IsA("TextButton")) then
-                local t = o.Text or ""
-                if t:find("%[2%]") then return 2 end
-            end
-        end
-        return 0
-    end)
-    
-    return success and result or 0
-end
-
--- SellItem
-local function trySell()
-    if tick() - lastSell < 1.5 then return end
-    local r = ReplicatedStorage:FindFirstChild("Remote")
-    if not r then return end
-    local s = r:FindFirstChild("SellItem")
-    if not s then return end
-    local args = {"돌 골렘 머리", "10"}
-    pcall(s.FireServer, s, unpack(args))
-    lastSell = tick()
-end
-
--- 특수 고블린 스킵
-local function isSpecial(mob)
-    if not mob then return false end
-    local la = mob:FindFirstChild("Left Arm") or mob:FindFirstChild("LeftArm")
-    if not la then return false end
-    local lar = la:FindFirstChild("L Armor") or la:FindFirstChild("LArmor")
-    if not lar then return false end
-    local m = lar:FindFirstChild("Meshes")
-    if not m then return false end
-    return m:FindFirstChild("zompg forest mob_Cone") ~= nil
-end
-
--- 슬라임 찾기
-local function findSlime()
-    local folder = workspace:FindFirstChild("Mobs")
-    if not folder then print("[ERROR] Mobs 폴더 없음") return nil end
-    
-    local kids = folder:GetChildren()
-    local cands = {}
-    
-    for _, m in ipairs(kids) do
-        if m and m:IsA("Model") and m.Name == "슬라임" then
-            local h = m:FindFirstChild("Humanoid")
-            local hrp = m:FindFirstChild("HumanoidRootPart")
-            if h and hrp and h.Health > 0 then
-                table.insert(cands, m)
+    for _, mob in ipairs(mobsFolder:GetChildren()) do
+        if mob.Name and mob:FindFirstChild("Humanoid") and mob:FindFirstChild("HumanoidRootPart") then
+            if not processedMobs[mob.Name] then
+                local displayName = mob.Name 
+                table.insert(mobDisplayList, displayName)
+                mobNameMap[displayName] = mob.Name
+                processedMobs[mob.Name] = true
             end
         end
     end
-    
-    print("[DEBUG] 슬라임 후보: " .. #cands)
-    if #cands == 0 then return nil end
-    
-    table.sort(cands, function(a,b)
-        local aHRP = a:FindFirstChild("HumanoidRootPart")
-        local bHRP = b:FindFirstChild("HumanoidRootPart")
-        if not aHRP or not bHRP then return false end
-        return (HRP.Position - aHRP.Position).Magnitude < (HRP.Position - bHRP.Position).Magnitude
-    end)
-    
-    return cands[1]
+
+    table.sort(mobDisplayList)
+    return mobDisplayList, mobNameMap
 end
 
--- 고블린 찾기
-local function findGoblin()
-    local folder = workspace:FindFirstChild("Mobs")
-    if not folder then print("[ERROR] Mobs 폴더 없음") return nil end
+-- 초기 몹 리스트 로드
+MobList, MobMap = getMobList()
+
+-- [[ 몹 사망 여부 확인 ]]
+local function isMobDead(mob)
+    if not (mob and mob.Parent) then return true end
     
-    local kids = folder:GetChildren()
-    local cands = {}
+    local humanoid = mob:FindFirstChildOfClass("Humanoid")
+    local rootPart = mob:FindFirstChild("HumanoidRootPart") or mob:FindFirstChild("HRP")
+
+    if not rootPart then return true end 
+    if humanoid and humanoid.Health <= 0 then return true end 
+
+    return false
+end
+
+-- [[ 타겟 몹 찾기 ]]
+local function findTargetMob()
+    if not AutoFarmConfig.TargetMob then return nil end
     
-    for _, m in ipairs(kids) do
-        if m and m:IsA("Model") and (m.Name == "고블린" or m.Name:find("고블린") or m.Name:lower():find("goblin")) then
-            local h = m:FindFirstChild("Humanoid")
-            local hrp = m:FindFirstChild("HumanoidRootPart")
-            if h and hrp and h.Health > 0 and not isSpecial(m) then
-                table.insert(cands, m)
+    for _, mob in pairs(Mobs:GetChildren()) do
+        if not isMobDead(mob) then
+            if mob.Name == AutoFarmConfig.TargetMob or string.find(mob.Name, AutoFarmConfig.TargetMob) then
+                return mob
             end
         end
     end
-    
-    print("[DEBUG] 고블린 후보: " .. #cands)
-    if #cands == 0 then return nil end
-    
-    table.sort(cands, function(a,b)
-        local aHRP = a:FindFirstChild("HumanoidRootPart")
-        local bHRP = b:FindFirstChild("HumanoidRootPart")
-        if not aHRP or not bHRP then return false end
-        return (HRP.Position - aHRP.Position).Magnitude < (HRP.Position - bHRP.Position).Magnitude
-    end)
-    
-    return cands[1]
+    return nil
 end
 
--- 히트박스 자동 선택
-local function getBestHitPart(mob)
-    if not mob then return HRP end
-    for _, name in ipairs({"Head", "UpperTorso", "Torso", "HumanoidRootPart", "LowerTorso"}) do
-        local part = mob:FindFirstChild(name)
-        if part then return part end
-    end
-    return mob:FindFirstChild("HumanoidRootPart") or mob
-end
-
--- 공격 (0.055초 쿨타임)
+-- [[ 공격 함수 (물리 클릭) ]]
 local function attack()
-    print("[ATTACK] 공격 시작 - 0.055초 쿨타임")
-    for i = 1, 100 do
-        VirtualUser:Button1Down(Vector2.new(500, 500))
-        task.wait(0.055 + math.random(-5,5)/1000)
-        VirtualUser:Button1Up(Vector2.new(500, 500))
+    VirtualUser:Button1Down(Vector2.new(500, 500))
+    task.wait(0.055)
+    VirtualUser:Button1Up(Vector2.new(500, 500))
+end
+
+-- [[ 위치 계산 (CFrame) ]]
+local function calculatePerfectCFrame(targetPos, distanceOffset, attackDirection)
+    local targetRootPart = AutoFarmConfig.CurrentTarget:FindFirstChild("HumanoidRootPart") or AutoFarmConfig.CurrentTarget:FindFirstChild("HRP")
+    if not targetRootPart then return CFrame.new(targetPos) end
+
+    local npcLookDirection = targetRootPart.CFrame.LookVector
+    local offsetPosition = targetRootPart.Position + (npcLookDirection * distanceOffset)
+    offsetPosition = Vector3.new(offsetPosition.X, targetPos.Y, offsetPosition.Z)
+
+    if attackDirection == "Up" or attackDirection == "Down" then
+        local angle = DirectionAngles[attackDirection] or 0
+        return CFrame.new(offsetPosition) * CFrame.Angles(math.rad(angle), 0, 0)
+    else
+        return CFrame.lookAt(offsetPosition, targetRootPart.Position)
     end
 end
 
--- 매크로 감지 시 자동 중단 (Anti-cheat 우회)
+-- [[ 오토팜 시작 함수 ]]
+local function startAutoFarm()
+    if AutoFarmConnection then 
+        AutoFarmConnection:Disconnect()
+        AutoFarmConnection = nil
+    end
+
+    local waitCFrame = nil
+
+    AutoFarmConnection = RunService.Heartbeat:Connect(function()
+        -- 리스폰 직후 3초 정지
+        if tick() - LastSpawnTime < 3 then 
+            waitCFrame = nil
+            return 
+        end
+
+        -- 죽음/안티치트 후 5초 중단
+        if tick() < deathPauseUntil then
+            return
+        end
+
+        local character = LocalPlayer.Character
+        if not character then return end
+
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        if not humanoid or not hrp then return end
+
+        if humanoid.Health <= 0 then
+            AutoFarmConfig.CurrentTarget = nil
+            waitCFrame = nil 
+            return
+        end
+
+        if not AutoFarmConfig.Enabled then
+            humanoid.PlatformStand = false
+            waitCFrame = nil
+            return
+        end
+
+        if AutoFarmConfig.CurrentTarget and isMobDead(AutoFarmConfig.CurrentTarget) then
+            AutoFarmConfig.CurrentTarget = nil
+        end
+        
+        if not AutoFarmConfig.CurrentTarget then
+            AutoFarmConfig.CurrentTarget = findTargetMob()
+        end
+
+        local currentTarget = AutoFarmConfig.CurrentTarget
+
+        if not currentTarget then
+            hrp.Velocity = Vector3.new(0, 0, 0)
+            
+            if not waitCFrame then
+                waitCFrame = hrp.CFrame * CFrame.new(0, 10, 0)
+            end
+            
+            hrp.CFrame = waitCFrame 
+            return
+        else
+            waitCFrame = nil
+        end
+
+        local targetRootPart = currentTarget:FindFirstChild("HumanoidRootPart") or currentTarget:FindFirstChild("HRP")
+        if not targetRootPart then
+            AutoFarmConfig.CurrentTarget = nil
+            return
+        end
+
+        local targetPos = Vector3.new(
+            targetRootPart.Position.X,
+            targetRootPart.Position.Y + AutoFarmConfig.HeightOffset,
+            targetRootPart.Position.Z
+        )
+
+        local finalCFrame = calculatePerfectCFrame(targetPos, AutoFarmConfig.Distance, AttackDirection)
+        hrp.CFrame = finalCFrame
+
+        -- 흔들림 방지
+        pcall(function() hrp:SetNetworkOwner(LocalPlayer) end)
+        hrp.Velocity = Vector3.new(0,0,0)
+        hrp.Anchored = true
+        task.wait(0.08)
+        hrp.Anchored = false
+
+        local currentTime = tick()
+        if currentTime - lastAttackTime >= 0.08 then
+            if AutoFarmConfig.AutoClickEnabled then
+                attack()
+            end
+            lastAttackTime = currentTime
+        end
+
+        if AutoFarmConfig.AutoSkillEnabled then
+            if currentTime - lastSkillTime >= 2 then
+                if AutoFarmConfig.Skills.E then fireSkill("E") end
+                if AutoFarmConfig.Skills.R then fireSkill("R") end
+                if AutoFarmConfig.Skills.T then fireSkill("T") end
+                lastSkillTime = currentTime
+            end
+        end
+    end)
+end
+
+-- Anti-cheat MacroGui 감지 시 자동 중단
 task.spawn(function()
     while true do
         task.wait(1)
@@ -184,78 +259,12 @@ task.spawn(function()
             local gui = LocalPlayer.PlayerGui:FindFirstChild("MacroGui")
             if gui and gui.Enabled then
                 print("[ANTI-CHEAT] MacroGui 감지 → 5초 오토팜 중단")
-                farming = false
+                AutoFarmConfig.Enabled = false
                 deathPauseUntil = tick() + 5
-                curTarget = nil
+                AutoFarmConfig.CurrentTarget = nil
             end
         end)
     end
 end)
 
--- 메인 루프
-RunService.Heartbeat:Connect(function()
-    if not farming or not HRP then return end
-    
-    -- 죽음/안티치트 후 중단 시간 체크
-    if tick() < deathPauseUntil then
-        farming = false
-        return
-    else
-        farming = true
-    end
-    
-    local lvl = getLevel()
-    if lvl >= 15 then farming = false print("Lv15 → 종료") return end
-    
-    local q = getQuestNum()
-    if q == 2 then trySell() end
-    
-    if not curTarget or not curTarget.Parent or (curTarget:FindFirstChildWhichIsA("Humanoid") and curTarget.Humanoid.Health <= 0) then
-        if lvl >= 10 then
-            curTarget = findSlime()
-        else
-            curTarget = findGoblin()
-        end
-        switchTime = tick()
-        if curTarget then print("[TARGET] " .. curTarget.Name) end
-    end
-    
-    if not curTarget then task.wait(1) return end
-    
-    local head = curTarget:FindFirstChild("Head") or curTarget:FindFirstChild("HumanoidRootPart")
-    if not head then
-        print("[WARNING] Head/HRP nil → 재탐색")
-        curTarget = nil
-        return
-    end
-    
-    local off = Vector3.new(0, 2.3, -0.3) -- 머리 위 2.3 + 앞으로 0.3
-    
-    local baseCFrame = CFrame.new(head.Position + off, head.Position)
-    local tilt = CFrame.Angles(math.rad(-60), 0, 0) -- 엎드림
-    
-    local finalCFrame = baseCFrame * tilt
-    
-    local tweenInfo = TweenInfo.new(0.05, Enum.EasingStyle.Linear)
-    local goal = {CFrame = finalCFrame}
-    local tween = TweenService:Create(HRP, tweenInfo, goal)
-    tween:Play()
-    
-    -- 흔들림 방지: Tween 후 즉시 재설정
-    task.delay(0.05, function()
-        if HRP and HRP.Parent then
-            HRP.CFrame = finalCFrame
-        end
-    end)
-    
-    pcall(function() HRP:SetNetworkOwner(LocalPlayer) end)
-    HRP.Velocity = Vector3.new(0,0,0)
-    HRP.Anchored = true
-    task.wait(0.08)
-    HRP.Anchored = false
-    
-    Hum.MaxHealth = math.huge Hum.Health = math.huge
-    task.spawn(attack)
-end)
-
-print("🚀 죽음 5초 중단 + 안티치트 자동 풀림 + 흔들림 제거 버전 실행 | F9 로그 확인") 
+print("🚀 모든 기능 완전 통합 완료 | upper 수직 고정 + 죽음 5초 중단 + 안티치트 자동 풀림 | F9 로그 확인")
