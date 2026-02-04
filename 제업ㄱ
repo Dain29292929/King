@@ -1,8 +1,10 @@
--- findSlime + findGoblin 완전 복구 | Lv10+ 슬라임 강제 | 머리 위 수직 엎드림 | 쿨타임 0.02초
+    -- 최종 통합: getQuestNum 오류 무시 + findSlime/findGoblin 복구 + 머리 위 수직 엎드림 | 쿨타임 0.02초 | anti-macro
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local VirtualUser = game:GetService("VirtualUser")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local GuiService = game:GetService("GuiService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 
@@ -11,6 +13,7 @@ local farming = true
 local lastSell = 0
 local curTarget = nil
 local switchTime = 0
+local AntiMacroEnabled = true  -- 매크로 우회 활성화
 
 -- 리스폰 바인드
 local function bindChar(char)
@@ -37,26 +40,48 @@ local function getLevel()
     return lvl.Value or 0
 end
 
--- getQuestNum 안전 버전 (오류 무시)
+-- getQuestNum 오류 완전 무시 (pcall 전체 + 이름 자동 탐색)
 local function getQuestNum()
     local success, result = pcall(function()
-        local pg = LocalPlayer:WaitForChild("PlayerGui", 10)
+        print("[DEBUG] getQuestNum 시도")
+        
+        local pg = LocalPlayer:WaitForChild("PlayerGui", 20)
         if not pg then return 0 end
         
-        local sg = pg:FindFirstChild("ScreenGui") or pg:FindFirstChild("MainGui") or pg:FindFirstChild("UI")
+        local guiNames = {"ScreenGui", "MainGui", "UI", "Hud", "PlayerHud", "GameUI", "QuestGui", "MissionUI", "TaskFrame", "Overlay", "Interface", "Gui", "MainUI", "PlayerUI", "CoreGui"}
+        local sg = nil
+        for _, name in ipairs(guiNames) do
+            sg = pg:FindFirstChild(name, true)
+            if sg then
+                print("[DEBUG] ScreenGui 발견: " .. name)
+                break
+            end
+        end
         if not sg then return 0 end
         
-        local q = sg:FindFirstChild("Quest") or sg:FindFirstChild("QuestFrame")
+        local questNames = {"Quest", "QuestFrame", "Mission", "Task", "QuestUI", "Objective", "QuestLog", "Progress", "Quests", "MissionFrame", "TaskUI", "QuestPanel"}
+        local q = nil
+        for _, name in ipairs(questNames) do
+            q = sg:FindFirstChild(name, true)
+            if q then
+                print("[DEBUG] Quest 발견: " .. name)
+                break
+            end
+        end
         if not q then return 0 end
         
         for _, o in pairs(q:GetDescendants()) do
-            if o and (o:IsA("TextLabel") or o:IsA("TextButton")) then
+            if o and (o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox")) then
                 local t = o.Text or ""
                 if t:find("%[2%]") then return 2 end
             end
         end
         return 0
     end)
+    
+    if not success then
+        print("[WARNING] getQuestNum 내부 오류 → 무시하고 0 반환")
+    end
     
     return success and result or 0
 end
@@ -85,7 +110,7 @@ local function isSpecial(mob)
     return m:FindFirstChild("zompg forest mob_Cone") ~= nil
 end
 
--- 슬라임 찾기 (FindFirstChild 안전화)
+-- 슬라임 찾기
 local function findSlime()
     local folder = workspace:FindFirstChild("Mobs")
     if not folder then print("[ERROR] Mobs 폴더 없음") return nil end
@@ -100,12 +125,12 @@ local function findSlime()
             if h and hrp and h.Health > 0 then
                 table.insert(cands, m)
             else
-                print("[DEBUG] 슬라임 " .. m.Name .. " - Humanoid 또는 HRP 없음 → 스킵")
+                print("[DEBUG] 슬라임 " .. m.Name .. " - Humanoid/HRP nil → 스킵")
             end
         end
     end
     
-    print("[DEBUG] 슬라임 후보 수: " .. #cands)
+    print("[DEBUG] 슬라임 후보: " .. #cands)
     if #cands == 0 then return nil end
     
     table.sort(cands, function(a,b)
@@ -118,7 +143,7 @@ local function findSlime()
     return cands[1]
 end
 
--- 고블린 찾기 (FindFirstChild 안전화)
+-- 고블린 찾기
 local function findGoblin()
     local folder = workspace:FindFirstChild("Mobs")
     if not folder then print("[ERROR] Mobs 폴더 없음") return nil end
@@ -133,12 +158,12 @@ local function findGoblin()
             if h and hrp and h.Health > 0 and not isSpecial(m) then
                 table.insert(cands, m)
             else
-                print("[DEBUG] 고블린 " .. m.Name .. " - Humanoid 또는 HRP 없음 → 스킵")
+                print("[DEBUG] 고블린 " .. m.Name .. " - Humanoid/HRP nil → 스킵")
             end
         end
     end
     
-    print("[DEBUG] 고블린 후보 수: " .. #cands)
+    print("[DEBUG] 고블린 후보: " .. #cands)
     if #cands == 0 then return nil end
     
     table.sort(cands, function(a,b)
@@ -191,7 +216,101 @@ local function attack()
     VirtualUser:Button1Up(Vector2.new(500, 500))
 end
 
--- 메인 루프
+-- 매크로 우회 (너가 준 코드 그대로 통합)
+local function clickGuiObject(obj)
+    if not obj or not obj.Visible or not obj.Active then return end
+    
+    local pos = obj.AbsolutePosition
+    local size = obj.AbsoluteSize
+    local topbarInset = GuiService:GetGuiInset().Y
+    
+    local x = pos.X + (size.X / 2)
+    local y = pos.Y + (size.Y / 2) + topbarInset
+
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
+end
+
+local function findDigitButton(keyFrame, digit)
+    for _, btn in ipairs(keyFrame:GetChildren()) do
+        if (btn:IsA("TextButton") or btn:IsA("ImageButton")) and btn.Text == digit then
+            return btn
+        end
+    end
+    return nil
+end
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        
+        if AntiMacroEnabled then
+            pcall(function()
+                local player = Players.LocalPlayer
+                if not player then return end
+
+                local gui = player.PlayerGui:FindFirstChild("MacroGui")
+                if gui and gui.Enabled then
+                    local rootFrame = gui:FindFirstChild("Frame") or gui:FindFirstChild("MacroClient") or gui
+                    if not rootFrame then return end
+                    
+                    local displayFrame = rootFrame:FindFirstChild("Frame")
+                    local keyFrame = rootFrame:FindFirstChild("KeyInputFrame")
+                    local resetFrame = rootFrame:FindFirstChild("KeyReset")
+                    
+                    if displayFrame and keyFrame then
+                        local inputLabel = displayFrame:FindFirstChild("Input") or displayFrame:FindFirstChildWhichIsA("TextLabel")
+                        local outputBox = displayFrame:FindFirstChild("TextBox")
+                        
+                        if inputLabel and outputBox then
+                            local targetNum = inputLabel.Text:match("%d%d%d%d")
+                            
+                            if targetNum and outputBox.Text ~= targetNum then
+                                print("[MACRO] 매크로 감지 → " .. targetNum .. " 입력 시도")
+                                
+                                if not keyFrame.Visible then
+                                    clickGuiObject(outputBox)
+                                    task.wait(0.8)
+                                end
+                                
+                                local resetBtn = resetFrame and resetFrame:FindFirstChild("TextButton")
+                                if resetBtn then
+                                    for i = 1, 5 do
+                                        if outputBox.Text == "" then break end
+                                        clickGuiObject(resetBtn)
+                                        task.wait(0.4)
+                                    end
+                                end
+                                
+                                task.wait(0.5)
+                                
+                                if outputBox.Text == "" then
+                                    for i = 1, #targetNum do
+                                        local digit = string.sub(targetNum, i, i)
+                                        local btn = findDigitButton(keyFrame, digit)
+                                        
+                                        if btn then
+                                            clickGuiObject(btn)
+                                            task.wait(0.35)
+                                        else
+                                            warn("숫자 버튼 못 찾음: " .. digit)
+                                        end
+                                    end
+                                    print("[MACRO] 입력 완료: " .. targetNum)
+                                end
+                                
+                                task.wait(2.5)
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+-- 메인 루프 (수직 머리 위 엎드림 고정)
 RunService.Heartbeat:Connect(function()
     if not farming or not HRP then return end
     
@@ -223,7 +342,7 @@ RunService.Heartbeat:Connect(function()
     local off = Vector3.new(0, 2.3, -0.3) -- 머리 위 2.3 + 앞으로 0.3
     
     local baseCFrame = CFrame.new(head.Position + off, head.Position)
-    local tilt = CFrame.Angles(math.rad(-60), 0, 0) -- 엎드림
+    local tilt = CFrame.Angles(math.rad(-60), 0, 0) -- 엎드림 각도
     
     local finalCFrame = baseCFrame * tilt
     
@@ -239,4 +358,5 @@ RunService.Heartbeat:Connect(function()
     task.spawn(attack)
 end)
 
-print("🚀 findSlime/findGoblin 완전 복구 & nil 안전 버전 실행 | F9 로그 확인")
+print("🚀 최종 통합 실행 | getQuestNum 오류 무시 | findSlime/findGoblin 복구 | F9 로그 확인")
+    
