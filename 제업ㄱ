@@ -1,4 +1,4 @@
--- 0.055초 쿨타임 고정 | VirtualUser 클릭만 | Lv10+ 슬라임 강제 | 머리 위 수직 엎드림
+-- 죽으면 5초 중단 + 리스폰 후 재개 | 흔들림 완전 방지 | Lv10+ 슬라임 강제 | 머리 위 수직 엎드림 | 쿨타임 0.02초
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -11,8 +11,9 @@ local farming = true
 local lastSell = 0
 local curTarget = nil
 local switchTime = 0
+local deathPauseUntil = 0  -- 죽으면 이 시간까지 중단
 
--- 리스폰 바인드
+-- 리스폰 바인드 + 사망 감지
 local function bindChar(char)
     print("[DEBUG] 캐릭터 재바인드")
     Character = char
@@ -23,6 +24,14 @@ local function bindChar(char)
     Hum.MaxHealth = math.huge Hum.Health = math.huge
     for _, p in pairs(char:GetDescendants()) do if p:IsA("BasePart") then p.CanCollide = false end end
     Instance.new("ForceField", char)
+    
+    -- 사망 감지 연결
+    Hum.Died:Connect(function()
+        print("[DEATH] 사망 감지 → 5초 오토팜 중단")
+        farming = false
+        deathPauseUntil = tick() + 5
+        curTarget = nil
+    end)
 end
 
 LocalPlayer.CharacterAdded:Connect(function(c) task.wait(0.5) bindChar(c) end)
@@ -99,8 +108,6 @@ local function findSlime()
             local hrp = m:FindFirstChild("HumanoidRootPart")
             if h and hrp and h.Health > 0 then
                 table.insert(cands, m)
-            else
-                print("[DEBUG] 슬라임 " .. m.Name .. " - Humanoid/HRP nil → 스킵")
             end
         end
     end
@@ -132,8 +139,6 @@ local function findGoblin()
             local hrp = m:FindFirstChild("HumanoidRootPart")
             if h and hrp and h.Health > 0 and not isSpecial(m) then
                 table.insert(cands, m)
-            else
-                print("[DEBUG] 고블린 " .. m.Name .. " - Humanoid/HRP nil → 스킵")
             end
         end
     end
@@ -161,19 +166,27 @@ local function getBestHitPart(mob)
     return mob:FindFirstChild("HumanoidRootPart") or mob
 end
 
--- 공격 (툴 없이 VirtualUser 클릭만, 0.055초 쿨타임)
+-- 공격 (0.055초 쿨타임)
 local function attack()
     print("[ATTACK] 공격 시작 - 0.055초 쿨타임")
     for i = 1, 100 do
         VirtualUser:Button1Down(Vector2.new(500, 500))
-        task.wait(0.055 + math.random(-5,5)/1000)  -- 0.05~0.06초 랜덤
+        task.wait(0.055 + math.random(-5,5)/1000)  -- 0.05~0.06초
         VirtualUser:Button1Up(Vector2.new(500, 500))
     end
 end
 
--- 메인 루프 (수직 머리 위 엎드림 고정)
+-- 메인 루프
 RunService.Heartbeat:Connect(function()
     if not farming or not HRP then return end
+    
+    -- 죽은 후 5초 중단 처리
+    if tick() < deathPauseUntil then
+        farming = false
+        return
+    else
+        farming = true
+    end
     
     local lvl = getLevel()
     if lvl >= 15 then farming = false print("Lv15 → 종료") return end
@@ -207,16 +220,27 @@ RunService.Heartbeat:Connect(function()
     
     local finalCFrame = baseCFrame * tilt
     
-    local tweenInfo = TweenInfo.new(0.1, Enum.EasingStyle.Linear)
+    -- 흔들림 방지: Tween 시간 줄이고, 추가 강제 설정
+    local tweenInfo = TweenInfo.new(0.05, Enum.EasingStyle.Linear)
     local goal = {CFrame = finalCFrame}
     local tween = TweenService:Create(HRP, tweenInfo, goal)
     tween:Play()
     
+    -- Tween 완료 후 즉시 재설정 (흔들림 완전 제거)
+    task.delay(0.05, function()
+        if HRP and HRP.Parent then
+            HRP.CFrame = finalCFrame
+        end
+    end)
+    
     pcall(function() HRP:SetNetworkOwner(LocalPlayer) end)
     HRP.Velocity = Vector3.new(0,0,0)
+    HRP.Anchored = true
+    task.wait(0.1)
+    HRP.Anchored = false
     
     Hum.MaxHealth = math.huge Hum.Health = math.huge
     task.spawn(attack)
 end)
 
-print("🚀 0.055초 쿨타임 버전 실행 | 툴 장착 제거 | VirtualUser 클릭 집중 | F9 로그 확인")
+print("🚀 죽으면 5초 중단 + 흔들림 완전 제거 버전 실행 | F9 로그 확인")
