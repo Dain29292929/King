@@ -1,4 +1,4 @@
--- getQuestNum 오류 완전 무시 + 안전 처리 | Lv10+ 슬라임 강제 | 머리 위 수직 엎드림 | 쿨타임 0.02초
+-- findSlime + findGoblin 완전 복구 | Lv10+ 슬라임 강제 | 머리 위 수직 엎드림 | 쿨타임 0.02초
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -37,38 +37,28 @@ local function getLevel()
     return lvl.Value or 0
 end
 
--- getQuestNum 오류 완전 무시 버전 (실패해도 그냥 0 반환 + 로그만)
+-- getQuestNum 안전 버전 (오류 무시)
 local function getQuestNum()
     local success, result = pcall(function()
-        print("[DEBUG] getQuestNum 시도")
-        
         local pg = LocalPlayer:WaitForChild("PlayerGui", 10)
         if not pg then return 0 end
         
-        local sg = pg:FindFirstChild("ScreenGui") or pg:FindFirstChild("MainGui") or pg:FindFirstChild("UI") or pg:FindFirstChild("Hud") or pg:FindFirstChild("PlayerUI")
+        local sg = pg:FindFirstChild("ScreenGui") or pg:FindFirstChild("MainGui") or pg:FindFirstChild("UI")
         if not sg then return 0 end
         
-        local q = sg:FindFirstChild("Quest") or sg:FindFirstChild("QuestFrame") or sg:FindFirstChild("Mission")
+        local q = sg:FindFirstChild("Quest") or sg:FindFirstChild("QuestFrame")
         if not q then return 0 end
         
         for _, o in pairs(q:GetDescendants()) do
             if o and (o:IsA("TextLabel") or o:IsA("TextButton")) then
                 local t = o.Text or ""
-                if t:find("%[2%]") then
-                    print("[DEBUG] [2] 발견")
-                    return 2
-                end
+                if t:find("%[2%]") then return 2 end
             end
         end
         return 0
     end)
     
-    if not success then
-        print("[WARNING] getQuestNum 내부 오류 발생 → 무시하고 0 반환")
-        return 0
-    end
-    
-    return result
+    return success and result or 0
 end
 
 -- SellItem
@@ -80,7 +70,6 @@ local function trySell()
     if not s then return end
     local args = {"돌 골렘 머리", "10"}
     pcall(s.FireServer, s, unpack(args))
-    print("[SELL] 판매 시도")
     lastSell = tick()
 end
 
@@ -96,10 +85,8 @@ local function isSpecial(mob)
     return m:FindFirstChild("zompg forest mob_Cone") ~= nil
 end
 
--- 타겟 찾기 (FindFirstChild 안전화)
-local function findTarget()
-    local lvl = getLevel()
-    local isSlime = (lvl >= 10)
+-- 슬라임 찾기 (FindFirstChild 안전화)
+local function findSlime()
     local folder = workspace:FindFirstChild("Mobs")
     if not folder then print("[ERROR] Mobs 폴더 없음") return nil end
     
@@ -107,23 +94,51 @@ local function findTarget()
     local cands = {}
     
     for _, m in ipairs(kids) do
-        if m and m:IsA("Model") then
-            local match = isSlime and (m.Name == "슬라임") or (m.Name == "고블린" or m.Name:find("고블린") or m.Name:lower():find("goblin"))
-            if match then
-                local h = m:FindFirstChildWhichIsA("Humanoid")
-                local hrp = m:FindFirstChild("HumanoidRootPart")
-                if h and hrp and h.Health > 0 then
-                    if not isSlime and isSpecial(m) then continue end
-                    table.insert(cands, m)
-                else
-                    print("[DEBUG] 몹 " .. m.Name .. " - Humanoid 또는 HRP 없음 → 스킵")
-                end
+        if m and m:IsA("Model") and m.Name == "슬라임" then
+            local h = m:FindFirstChild("Humanoid")
+            local hrp = m:FindFirstChild("HumanoidRootPart")
+            if h and hrp and h.Health > 0 then
+                table.insert(cands, m)
+            else
+                print("[DEBUG] 슬라임 " .. m.Name .. " - Humanoid 또는 HRP 없음 → 스킵")
             end
         end
     end
     
-    print("[DEBUG] 후보 몹 수: " .. #cands .. " (슬라임 모드: " .. tostring(isSlime) .. " Lv" .. lvl .. ")")
+    print("[DEBUG] 슬라임 후보 수: " .. #cands)
+    if #cands == 0 then return nil end
     
+    table.sort(cands, function(a,b)
+        local aHRP = a:FindFirstChild("HumanoidRootPart")
+        local bHRP = b:FindFirstChild("HumanoidRootPart")
+        if not aHRP or not bHRP then return false end
+        return (HRP.Position - aHRP.Position).Magnitude < (HRP.Position - bHRP.Position).Magnitude
+    end)
+    
+    return cands[1]
+end
+
+-- 고블린 찾기 (FindFirstChild 안전화)
+local function findGoblin()
+    local folder = workspace:FindFirstChild("Mobs")
+    if not folder then print("[ERROR] Mobs 폴더 없음") return nil end
+    
+    local kids = folder:GetChildren()
+    local cands = {}
+    
+    for _, m in ipairs(kids) do
+        if m and m:IsA("Model") and (m.Name == "고블린" or m.Name:find("고블린") or m.Name:lower():find("goblin")) then
+            local h = m:FindFirstChild("Humanoid")
+            local hrp = m:FindFirstChild("HumanoidRootPart")
+            if h and hrp and h.Health > 0 and not isSpecial(m) then
+                table.insert(cands, m)
+            else
+                print("[DEBUG] 고블린 " .. m.Name .. " - Humanoid 또는 HRP 없음 → 스킵")
+            end
+        end
+    end
+    
+    print("[DEBUG] 고블린 후보 수: " .. #cands)
     if #cands == 0 then return nil end
     
     table.sort(cands, function(a,b)
@@ -146,7 +161,7 @@ local function getBestHitPart(mob)
     return mob:FindFirstChild("HumanoidRootPart") or mob
 end
 
--- 공격 (쿨타임 0.02초 강제)
+-- 공격 (쿨타임 0.02초)
 local function attack()
     local tool = Character:FindFirstChildWhichIsA("Tool")
     if not tool then
@@ -176,7 +191,7 @@ local function attack()
     VirtualUser:Button1Up(Vector2.new(500, 500))
 end
 
--- 메인 루프 (수직 머리 위 엎드림 고정)
+-- 메인 루프
 RunService.Heartbeat:Connect(function()
     if not farming or not HRP then return end
     
@@ -208,7 +223,7 @@ RunService.Heartbeat:Connect(function()
     local off = Vector3.new(0, 2.3, -0.3) -- 머리 위 2.3 + 앞으로 0.3
     
     local baseCFrame = CFrame.new(head.Position + off, head.Position)
-    local tilt = CFrame.Angles(math.rad(-60), 0, 0) -- 엎드림 각도
+    local tilt = CFrame.Angles(math.rad(-60), 0, 0) -- 엎드림
     
     local finalCFrame = baseCFrame * tilt
     
@@ -224,4 +239,4 @@ RunService.Heartbeat:Connect(function()
     task.spawn(attack)
 end)
 
-print("🚀 getQuestNum 오류 완전 무시 버전 실행 | nil 안전 | F9 로그 확인")
+print("🚀 findSlime/findGoblin 완전 복구 & nil 안전 버전 실행 | F9 로그 확인")
