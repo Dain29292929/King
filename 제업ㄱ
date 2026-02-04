@@ -1,4 +1,4 @@
--- nil 에러 완전 해결 | FindFirstChild 안전화 | Lv10+ 슬라임 강제 | 머리 위 수직 엎드림 | 쿨타임 0.02초
+-- getQuestNum 오류 완전 무시 + 안전 처리 | Lv10+ 슬라임 강제 | 머리 위 수직 엎드림 | 쿨타임 0.02초
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -31,35 +31,44 @@ if LocalPlayer.Character then bindChar(LocalPlayer.Character) end
 -- 레벨
 local function getLevel()
     local ls = LocalPlayer:WaitForChild("leaderstats", 8)
-    if not ls then print("[DEBUG] leaderstats nil") return 0 end
+    if not ls then return 0 end
     local lvl = ls:WaitForChild("Level", 5)
-    if not lvl then print("[DEBUG] Level nil") return 0 end
+    if not lvl then return 0 end
     return lvl.Value or 0
 end
 
--- getQuestNum 안전 버전
+-- getQuestNum 오류 완전 무시 버전 (실패해도 그냥 0 반환 + 로그만)
 local function getQuestNum()
-    print("[DEBUG] getQuestNum 호출")
-    
-    local pg = LocalPlayer:WaitForChild("PlayerGui", 15)
-    if not pg then print("[WARNING] PlayerGui nil") return 0 end
-    
-    local sg = pg:FindFirstChild("ScreenGui") or pg:FindFirstChild("MainGui") or pg:FindFirstChild("UI") or pg:FindFirstChild("Hud")
-    if not sg then print("[DEBUG] ScreenGui 계열 nil") return 0 end
-    
-    local q = sg:FindFirstChild("Quest") or sg:FindFirstChild("QuestFrame") or sg:FindFirstChild("Mission")
-    if not q then print("[DEBUG] Quest 객체 nil") return 0 end
-    
-    for _, o in pairs(q:GetDescendants()) do
-        if o and (o:IsA("TextLabel") or o:IsA("TextButton")) then
-            local t = o.Text or ""
-            if t:find("%[2%]") then 
-                print("[DEBUG] [2] 발견")
-                return 2 
+    local success, result = pcall(function()
+        print("[DEBUG] getQuestNum 시도")
+        
+        local pg = LocalPlayer:WaitForChild("PlayerGui", 10)
+        if not pg then return 0 end
+        
+        local sg = pg:FindFirstChild("ScreenGui") or pg:FindFirstChild("MainGui") or pg:FindFirstChild("UI") or pg:FindFirstChild("Hud") or pg:FindFirstChild("PlayerUI")
+        if not sg then return 0 end
+        
+        local q = sg:FindFirstChild("Quest") or sg:FindFirstChild("QuestFrame") or sg:FindFirstChild("Mission")
+        if not q then return 0 end
+        
+        for _, o in pairs(q:GetDescendants()) do
+            if o and (o:IsA("TextLabel") or o:IsA("TextButton")) then
+                local t = o.Text or ""
+                if t:find("%[2%]") then
+                    print("[DEBUG] [2] 발견")
+                    return 2
+                end
             end
         end
+        return 0
+    end)
+    
+    if not success then
+        print("[WARNING] getQuestNum 내부 오류 발생 → 무시하고 0 반환")
+        return 0
     end
-    return 0
+    
+    return result
 end
 
 -- SellItem
@@ -92,10 +101,7 @@ local function findTarget()
     local lvl = getLevel()
     local isSlime = (lvl >= 10)
     local folder = workspace:FindFirstChild("Mobs")
-    if not folder then
-        print("[ERROR] Mobs 폴더 없음")
-        return nil
-    end
+    if not folder then print("[ERROR] Mobs 폴더 없음") return nil end
     
     local kids = folder:GetChildren()
     local cands = {}
@@ -104,11 +110,13 @@ local function findTarget()
         if m and m:IsA("Model") then
             local match = isSlime and (m.Name == "슬라임") or (m.Name == "고블린" or m.Name:find("고블린") or m.Name:lower():find("goblin"))
             if match then
-                local h = m:FindFirstChild("Humanoid") or m:FindFirstChildWhichIsA("Humanoid")
+                local h = m:FindFirstChildWhichIsA("Humanoid")
                 local hrp = m:FindFirstChild("HumanoidRootPart")
                 if h and hrp and h.Health > 0 then
                     if not isSlime and isSpecial(m) then continue end
                     table.insert(cands, m)
+                else
+                    print("[DEBUG] 몹 " .. m.Name .. " - Humanoid 또는 HRP 없음 → 스킵")
                 end
             end
         end
@@ -138,7 +146,7 @@ local function getBestHitPart(mob)
     return mob:FindFirstChild("HumanoidRootPart") or mob
 end
 
--- 공격 (쿨타임 0.02초)
+-- 공격 (쿨타임 0.02초 강제)
 local function attack()
     local tool = Character:FindFirstChildWhichIsA("Tool")
     if not tool then
@@ -200,7 +208,7 @@ RunService.Heartbeat:Connect(function()
     local off = Vector3.new(0, 2.3, -0.3) -- 머리 위 2.3 + 앞으로 0.3
     
     local baseCFrame = CFrame.new(head.Position + off, head.Position)
-    local tilt = CFrame.Angles(math.rad(-60), 0, 0) -- 더 강하게 엎드림
+    local tilt = CFrame.Angles(math.rad(-60), 0, 0) -- 엎드림 각도
     
     local finalCFrame = baseCFrame * tilt
     
@@ -216,4 +224,4 @@ RunService.Heartbeat:Connect(function()
     task.spawn(attack)
 end)
 
-print("🚀 수직 머리 위 엎드림 고정 공격 완성 | nil 안전 | F9 로그 확인")
+print("🚀 getQuestNum 오류 완전 무시 버전 실행 | nil 안전 | F9 로그 확인")
