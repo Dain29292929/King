@@ -1,0 +1,71 @@
+-- =============================================
+-- 교육용 - Spectate 0.5일 때만 수집 + 100/100 즉사
+-- (Vector 제거 + 상태 print 버전)
+-- =============================================
+
+local player = game:GetService("Players").LocalPlayer
+local spectate = player.PlayerGui.MainUI.MobileNav.Buttons.Spectate
+local coinCount = player.PlayerGui.MainUI.Round.Coin.Coin.CoinCount
+local coinsFolder = workspace.Game.Coins
+
+print("✅ 스크립트 시작 - Spectate 투명도 감시 중...")
+
+while true do
+    -- 투명도 체크
+    if spectate.ImageTransparency \~= 0.5 then
+        print("[대기] Spectate 투명도 = " .. spectate.ImageTransparency .. " → 0.5 기다리는 중...")
+        task.wait(0.4)
+        continue
+    end
+
+    print("🟢 [시작] Spectate 투명도 0.5 감지! 코인 수집 시작")
+
+    for i, part in ipairs(coinsFolder:GetChildren()) do
+        -- 수집 중에도 계속 0.5인지 확인
+        if spectate.ImageTransparency \~= 0.5 then
+            print("🔴 [중단] Spectate 투명도가 0.5에서 벗어남 → 수집 중단")
+            break
+        end
+
+        if part:IsA("BasePart") then
+            local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if not hrp then 
+                print("❌ HumanoidRootPart 없음")
+                break 
+            end
+
+            -- 정확히 파트 위치로 텔포 (Vector 없음)
+            hrp.CFrame = part.CFrame
+            print("➡️ [" .. i .. "] " .. part.Name .. " 으로 텔포 완료")
+
+            task.wait(0.05)
+
+            -- TouchInterest 발동
+            local ti = part:FindFirstChild("TouchInterest")
+            if ti then
+                firetouchinterest(part, hrp, 0)
+                print("   ✅ TouchInterest 발동 완료")
+            else
+                print("   ⚠️ TouchInterest 없음")
+            end
+
+            task.wait(0.08)
+
+            -- 코인 수 체크
+            print("   현재 코인: " .. coinCount.Text)
+
+            if coinCount.Text == "100 / 100" then
+                print("💀 [즉사] 100/100 달성 → Health 0 설정")
+                local hum = player.Character and player.Character:FindFirstChild("Humanoid")
+                if hum then
+                    hum.Health = 0
+                end
+                task.wait(1.2)
+                break
+            end
+        end
+    end
+
+    print("🔄 한 사이클 종료. 다시 Spectate 상태 확인 중...")
+    task.wait(0.25)
+end
