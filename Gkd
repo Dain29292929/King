@@ -1,0 +1,71 @@
+local plr = game:GetService("Players").LocalPlayer
+local char = plr.Character or plr.CharacterAdded:Wait()
+local hrp = char:WaitForChild("HumanoidRootPart")
+
+-- 캐릭터 리스폰 시 hrp 갱신
+plr.CharacterAdded:Connect(function(newChar)
+    char = newChar
+    hrp = newChar:WaitForChild("HumanoidRootPart")
+end)
+
+while true do
+    local canTeleport = true
+
+    -- Spectate 버튼 체크 (ImageTransparency == 0이면 텔포 중지)
+    pcall(function()
+        local spectateBtn = plr:WaitForChild("PlayerGui"):WaitForChild("MainUI"):WaitForChild("MobileNav"):WaitForChild("Buttons"):WaitForChild("Spectate")
+        if spectateBtn and spectateBtn.ImageTransparency == 0 then
+            canTeleport = false
+        end
+    end)
+
+    if canTeleport then
+        local coinsFolder = workspace:WaitForChild("Game"):WaitForChild("Coins")
+
+        -- 코인 폴더에 아무것도 없으면 대기
+        while #coinsFolder:GetChildren() == 0 do
+            wait(0.2)
+        end
+
+        for _, part in pairs(coinsFolder:GetChildren()) do
+            if part:IsA("BasePart") then
+                pcall(function()
+                    hrp.CFrame = part.CFrame + Vector3.new(3, 0, 3)
+                    wait(0.2)
+                    firetouchinterest(hrp, part, 0)
+                    wait(0.15)
+                    firetouchinterest(hrp, part, 1)
+                    wait(0.15)
+                    firetouchinterest(hrp, part, 0)
+                    wait(0.15)
+                    firetouchinterest(hrp, part, 1)
+                    wait(0.15)
+                    firetouchinterest(hrp, part, 0)
+                    wait(0.15)
+                    firetouchinterest(hrp, part, 1)
+                    wait(0.15)
+                end)
+            end
+        end
+    end
+
+    -- 코인 카운트 체크 (100/100 또는 50/50이면 Health 0 설정)
+    pcall(function()
+        local coinCount = plr:WaitForChild("PlayerGui"):WaitForChild("MainUI"):WaitForChild("Round"):WaitForChild("Coin"):WaitForChild("Coin"):WaitForChild("CoinCount")
+        if coinCount and coinCount.Text then
+            local text = coinCount.Text
+            if text == "100 / 100" or text == "50 / 50" then
+                local currentChar = plr.Character
+                if currentChar then
+                    local hum = currentChar:WaitForChild("Humanoid")
+                    if hum then
+                        hum.Health = 0
+                        wait(2)
+                    end
+                end
+            end
+        end
+    end)
+
+    wait()
+end
